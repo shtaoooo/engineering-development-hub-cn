@@ -17,7 +17,8 @@ Log-Info -Message "Installing DCV VDI host monitoring (CW Agent + streaming coll
 
 $AwsRegion  = "{{ context.get('/configuration/Region') }}"
 $ClusterId  = "{{ context.get('/configuration/ClusterId') }}"
-$CwaUrl     = "https://amazoncloudwatch-agent-$($AwsRegion).s3.$($AwsRegion).amazonaws.com/windows/amd64/latest/amazon-cloudwatch-agent.msi"
+$AwsDomainSuffix = if ($AwsRegion -like "cn-*") { "amazonaws.com.cn" } else { "amazonaws.com" }
+$CwaUrl     = "https://amazoncloudwatch-agent-$($AwsRegion).s3.$($AwsRegion).$AwsDomainSuffix/windows/amd64/latest/amazon-cloudwatch-agent.msi"
 
 ##
 ## 1. CloudWatch Agent
@@ -101,23 +102,35 @@ if (-not (Test-Path $StateDir))     { New-Item -ItemType Directory -Force -Path 
 # keep the image clean and to not collide with any user-installed
 # Python on the desktop image.
 $PyVersion = "3.11.9"
-$PyZipUrl  = "https://www.python.org/ftp/python/$PyVersion/python-$PyVersion-embed-amd64.zip"
+$PyZipUrl  = "{{ context.get('/system/windows_dcv_monitoring/python_embed_url') }}"
+$GetPipUrl = "{{ context.get('/system/windows_dcv_monitoring/get_pip_url') }}"
+$PipIndexUrl = "{{ context.get('/system/windows_dcv_monitoring/pip_index_url', '') }}"
+$PipWheelhouseS3Uri = "{{ context.get('/system/windows_dcv_monitoring/pip_wheelhouse_s3_uri', '') }}"
 $PyZip     = "$env:TEMP\python-embed.zip"
 $PyExe     = "$CollectorPython\python.exe"
 
 if (-not (Test-Path $PyExe)) {
     Log-Info -Message "Downloading Python $PyVersion embeddable for collector"
-    Invoke-WebRequest -Uri $PyZipUrl -OutFile $PyZip -UseBasicParsing
+    Invoke-SOCAFileDownload -DownloadUrl $PyZipUrl -SaveAs $PyZip
     Expand-Archive -Path $PyZip -DestinationPath $CollectorPython -Force
     # Enable site-packages so pip-installed boto3 is importable
     $PthFile = Get-ChildItem $CollectorPython -Filter "python*._pth" | Select-Object -First 1
     if ($PthFile) {
         (Get-Content $PthFile.FullName) -replace '^#import site', 'import site' | Set-Content $PthFile.FullName -Encoding ASCII
     }
-    # Bootstrap pip
-    Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "$env:TEMP\get-pip.py" -UseBasicParsing
-    & $PyExe "$env:TEMP\get-pip.py" --quiet
-    & $PyExe -m pip install --quiet boto3
+    # Install boto3 from an offline S3 wheelhouse or approved package index.
+    $GetPipPath = "$env:TEMP\get-pip.py"
+    Invoke-SOCAFileDownload -DownloadUrl $GetPipUrl -SaveAs $GetPipPath
+    & $PyExe $GetPipPath --quiet
+    if ($PipWheelhouseS3Uri) {
+        $Wheelhouse = "$CollectorDir\wheelhouse"
+        Invoke-SOCAAwsCli s3 sync $PipWheelhouseS3Uri $Wheelhouse --quiet
+        & $PyExe -m pip install --quiet --no-index --find-links $Wheelhouse boto3
+    } elseif ($PipIndexUrl) {
+        & $PyExe -m pip install --quiet --index-url $PipIndexUrl boto3
+    } else {
+        & $PyExe -m pip install --quiet boto3
+    }
 }
 
 # Render the cross-platform collector script (same source as Linux).

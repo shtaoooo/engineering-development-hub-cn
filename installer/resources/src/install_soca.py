@@ -192,6 +192,105 @@ def spinner(message: str, spinner: str = "aesthetic"):
     return console.status(f"[bold #4db8ff]{message}[/bold #4db8ff]", spinner=spinner)
 
 
+_CN_ARTIFACT_EXCLUDED_PATHS = {
+    "system/awscliv2",
+    "system/python/pip_index_url",
+    "system/python/pip_extra_index_url",
+    "system/nodejs/npm_registry",
+    "system/windows_dcv_monitoring/pip_index_url",
+    "system/gpu/gpu_settings/nvidia/linux/tesla_drivers/public_driver_url_endpoint",
+    "system/gpu/gpu_settings/amd/linux/radeon_repo_url",
+}
+
+
+def is_cn_artifact_excluded(path: str) -> bool:
+    return any(
+        path == excluded
+        or path.startswith(f"{excluded}/")
+        or path.endswith(f"/{excluded}")
+        for excluded in _CN_ARTIFACT_EXCLUDED_PATHS
+    )
+
+
+def rewrite_cn_artifact_urls(
+    node: object, artifact_base_uri: str, path: str = ""
+) -> None:
+    """Rewrite static external artifacts to an approved Ningxia S3 prefix."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            child_path = f"{path}/{key}" if path else key
+            if isinstance(value, str) and value.startswith(("http://", "https://")):
+                if (
+                    is_cn_artifact_excluded(child_path)
+                    or "%" in value
+                    or value.endswith(".git")
+                ):
+                    continue
+                origin = value.split("://", 1)[1].lstrip("/")
+                node[key] = f"{artifact_base_uri}/{origin}"
+            else:
+                rewrite_cn_artifact_urls(value, artifact_base_uri, child_path)
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            rewrite_cn_artifact_urls(value, artifact_base_uri, f"{path}/{index}")
+
+
+def apply_cn_northwest_defaults(install_properties: dict, region: str) -> None:
+    """Apply an opt-out minimal feature set for China (Ningxia).
+
+    China Regions are a separate partition and optional service availability
+    differs from commercial Regions. Operators can set
+    Config.china_region.safe_defaults_enabled=false after validating each
+    capability in their account and target Region.
+    """
+    if region != "cn-northwest-1":
+        return
+
+    config = install_properties.setdefault("Config", {})
+    china_config = config.setdefault("china_region", {})
+    artifact_base_uri = str(china_config.get("artifact_base_uri", "")).rstrip("/")
+    if not artifact_base_uri.startswith("s3://"):
+        logger.error(
+            "Config.china_region.artifact_base_uri must be an approved s3:// URI "
+            "when deploying to cn-northwest-1."
+        )
+        sys.exit(1)
+    if not china_config.get("safe_defaults_enabled", True):
+        logger.warning("China safe defaults disabled by configuration")
+        return
+
+    config.setdefault("network", {}).setdefault("aws_aga", {})["enabled"] = False
+    config.setdefault("services", {}).setdefault("aws_batch", {})[
+        "create_default_edh_environment"
+    ] = False
+    mirror_config = config.setdefault("services", {}).setdefault(
+        "resources_mirroring", {}
+    )
+    mirror_config.update({"enabled": True, "method": "install-host", "failure_mode": "hard"})
+    config.setdefault("services", {}).setdefault("usb_remotization", {})["enabled"] = False
+    config.setdefault("analytics", {})["enabled"] = False
+    config.setdefault("ai_assistant", {})["allowed_bedrock_model_ids"] = []
+    config.setdefault("database", {})["provider"] = "sqlite"
+    openpbs_config = (
+        install_properties.setdefault("Parameters", {})
+        .setdefault("system", {})
+        .setdefault("scheduler", {})
+        .setdefault("openpbs", {})
+    )
+    openpbs_config["deployment_type"] = "tgz"
+    rewrite_cn_artifact_urls(install_properties.get("Parameters", {}), artifact_base_uri)
+    dcv_config = config.setdefault("dcv", {})
+    dcv_config["high_scale"] = False
+    dcv_config.setdefault("pool", {})["enabled"] = False
+    dcv_config.setdefault("session_sharing", {})["enabled"] = False
+    logger.warning(
+        "Applied China (Ningxia) safe defaults: disabled Global Accelerator, "
+        "Batch sample environment, USB resolver, analytics, Bedrock models and DCV high-scale; "
+        f"selected sqlite and S3 artifacts under {artifact_base_uri}. Set "
+        "Config.china_region.safe_defaults_enabled=false only after regional validation."
+    )
+
+
 def extract_kms_keys(data: dict, path: str = "") -> list[dict[str, str]]:
     """Recursively extract all kms_key_id and volume_kms_key_id values from a nested dict."""
     results = []
@@ -645,6 +744,11 @@ if __name__ == "__main__":
             "Re-built boto3 clients with user-selected region for validation and use in CDK deployment"
         )
 
+        apply_cn_northwest_defaults(
+            install_properties=_get_install_properties,
+            region=install_parameters["region"],
+        )
+
         if args.prefix_list_id:
             with spinner(message=_("Validating EC2 Prefix List ID ... ")):
                 _pl_info = check_prefix_list(
@@ -697,8 +801,13 @@ if __name__ == "__main__":
             try:
                 logger.debug(f"Validating OpenSearch SLR")
                 _iam_paginator = client_iam.get_paginator("list_roles")
+                _opensearch_service_principal = (
+                    "opensearchservice.amazonaws.com.cn"
+                    if install_parameters["partition"] == "aws-cn"
+                    else "opensearchservice.amazonaws.com"
+                )
                 _iam_iter = _iam_paginator.paginate(
-                    PathPrefix="/aws-service-role/opensearchservice.amazonaws.com"
+                    PathPrefix=f"/aws-service-role/{_opensearch_service_principal}"
                 )
                 for _page in _iam_iter:
                     logger.debug(f"Processing Role page: {_page}")

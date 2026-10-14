@@ -8,6 +8,13 @@ Config:
   admin_user_name: "edhadmin" # The name of the default admin username that will be created.
   metadata_http_tokens: "required" # Supported values are "required" (recommended) for IMDSv2 or "optional" for IMDSv1 (https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-launchtemplate-launchtemplatedata-metadataoptions.html#cfn-ec2-launchtemplate-launchtemplatedata-metadataoptions-httptokens)
 
+  # China-specific values belong in installer/config.cn-northwest-1.yml.
+  # Use both files with --config default_config.yml,config.cn-northwest-1.yml.
+  china_region:
+    safe_defaults_enabled: true # disables unverified services
+    artifact_base_uri: "" # Required in cn-northwest-1, e.g. s3://<bucket>/edh/artifacts
+    ami_overrides: {} # {x86_64: {amazonlinux2023: ami-...}, arm64: {...}}
+
   # A Global KMS KeyID (Arn) for any encrypted operations.
   # Setting this removes the need to set on a per-resource basis.
   # Note a per-resource key will over-ride this setting.
@@ -782,6 +789,8 @@ Config:
   lambda_layers:
     Boto3Version: "1.43.68" # boto3 version to bundle as a Lambda layer for all functions
     CryptographyVersion: "48.0.0" # cryptography version for the shared crypto Lambda layer (X.509/CA generation; e.g. DcvBrokerCaGenerator). Compiled wheels are built arch-aware for the Lambda runtime. Empty disables the layer.
+    pip_index_url: "https://mirrors.aliyun.com/pypi/simple/" # Public China PyPI mirror for Lambda layer builds
+    pip_extra_index_url: "" # Optional secondary Python package index for Lambda layers
 
   # File transfer engine version. v1 = Dropzone upload + native browser download.
   # v2 = Uppy/tus resumable upload + parallel ranged download (early access; slated
@@ -971,6 +980,11 @@ Parameters:
       version: "3.13.13"
       url: "https://www.python.org/ftp/python/3.13.13/Python-3.13.13.tgz"
       sha256: "f9cde7b0e2ec8165d7326e2a0f59ea2686ce9d0c617dbbb3d66a7e54d31b74b9"
+      # Optional private Python repository or offline wheelhouse. A wheelhouse
+      # must contain every wheel required by the selected controller/node OS.
+      pip_index_url: "https://mirrors.aliyun.com/pypi/simple/"
+      pip_extra_index_url: ""
+      pip_wheelhouse_s3_uri: ""
 
     # Scheduler to deploy on all SOCA nodes
     scheduler:
@@ -1140,6 +1154,7 @@ Parameters:
     nodejs:
       url: "https://nodejs.org/dist/v24.15.0/node-v24.15.0-linux-x64.tar.xz"
       sha256: "472655581fb851559730c48763e0c9d3bc25975c59d518003fc0849d3e4ba0f6"
+      npm_registry: "https://registry.npmmirror.com/" # Public China npm registry
 
     # EFA Drivers installed on all HPC Compute node when efa_support=True is specified
     # https://aws.amazon.com/hpc/efa/
@@ -1216,6 +1231,11 @@ Parameters:
 
     # Amazon DCV Settings
     # https://aws.amazon.com/hpc/dcv/
+    windows_dcv_monitoring:
+      python_embed_url: "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip"
+      get_pip_url: "https://bootstrap.pypa.io/get-pip.py"
+      pip_index_url: "https://mirrors.aliyun.com/pypi/simple/"
+      pip_wheelhouse_s3_uri: "" # Offline wheelhouse with boto3 and all transitive wheels
     dcv:
       session_storage: "dcv_session_storage"
       idle_timeout: 1440

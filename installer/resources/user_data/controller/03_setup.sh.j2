@@ -67,8 +67,12 @@ set_environment_variable "EDH_CONTROLLER_IP" "$(get_ipv4_host_address)"
 # Install NodeJS
 {% include "templates/linux/nodejs.sh.j2" %}
 
-# Install required Node modules
-${EDH_BOOTSTRAP_ASSETS_FOLDER}/node/bin/npm install --prefix "/opt/edh/{{ context.get("/configuration/ClusterId") }}/cluster_manager/web_interface/static" monaco-editor@0.52.0
+# Install required Node modules. npm_registry lets China/on-prem deployments
+# use an approved internal registry instead of registry.npmjs.org.
+NPM_REGISTRY="{{ context.get('/system/nodejs/npm_registry', '') }}"
+NPM_ARGS=()
+[[ -n "${NPM_REGISTRY}" ]] && NPM_ARGS+=(--registry "${NPM_REGISTRY}")
+${EDH_BOOTSTRAP_ASSETS_FOLDER}/node/bin/npm install "${NPM_ARGS[@]}" --prefix "/opt/edh/{{ context.get("/configuration/ClusterId") }}/cluster_manager/web_interface/static" monaco-editor@0.52.0
 
 # Start Schedulers
 {% include "templates/linux/scheduler/start_scheduler_services.sh.j2" %}

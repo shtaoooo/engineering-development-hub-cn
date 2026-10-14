@@ -170,11 +170,17 @@ SOCA_PYTHON_SKIP_VENV=${SOCA_PYTHON_SKIP_VENV:-"false"}
 SOCA_PYTHON_VERSION=${SOCA_PYTHON_VERSION:-"3.13"}
 export SOCA_PYTHON_VERSION
 
-PYENV_URL="https://pyenv.run"
+# Corporate or China-local mirrors can be supplied without changing this file.
+# pip and npm natively honor PIP_INDEX_URL, PIP_EXTRA_INDEX_URL and
+# NPM_CONFIG_REGISTRY, which are inherited by the installer and CDK subprocesses.
+PYENV_URL="${EDH_PYENV_URL:-https://pyenv.run}"
+NODEJS_BIN="${EDH_NVM_INSTALL_URL:-https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh}"
 INSTALLER_DIRECTORY=$(dirname $(realpath "$0"))
 PYTHON_VENV="$INSTALLER_DIRECTORY/resources/src/envs/venv-py-installer"
-NODEJS_BIN="https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh"
 export NVM_DIR="$INSTALLER_DIRECTORY/resources/src/envs/.nvm"
+
+[[ -n "${PIP_INDEX_URL:-}" ]] && log_info "Using configured Python package index"
+[[ -n "${NPM_CONFIG_REGISTRY:-}" ]] && log_info "Using configured npm registry"
 
 # shellcheck disable=SC2164
 cd "$INSTALLER_DIRECTORY"

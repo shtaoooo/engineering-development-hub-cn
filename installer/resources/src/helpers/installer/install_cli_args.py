@@ -21,7 +21,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "-c",
         type=str,
         default=f"{os.path.dirname(os.path.realpath(__file__))}/../../../../default_config.yml",
-        help=_("Path of custom config file(s). Defaults to default_config.yml ."),
+        help=_(
+            "Path of a YAML config file, or comma-separated base and overlay files. Defaults to default_config.yml."
+        ),
     )
 
     parser.add_argument(

@@ -1,0 +1,23 @@
+# Ningxia overlay. Do not put credentials in this file.
+# Use with: --config installer/default_config.yml,installer/config.cn-northwest-1.yml
+# Public China mirrors are used for Python and npm. Use a private mirror in regulated environments.
+Config:
+  china_region:
+    safe_defaults_enabled: true
+    artifact_base_uri: "s3://nwcd-solutions/edh/artifacts"
+    # AMI IDs are account/region scoped. Leave empty until a real AMI is verified.
+    ami_overrides: {}
+  lambda_layers:
+    pip_index_url: "https://mirrors.aliyun.com/pypi/simple/"
+    pip_extra_index_url: ""
+Parameters:
+  system:
+    python:
+      pip_index_url: "https://mirrors.aliyun.com/pypi/simple/"
+      pip_extra_index_url: ""
+      pip_wheelhouse_s3_uri: ""
+    nodejs:
+      npm_registry: "https://registry.npmmirror.com/"
+    windows_dcv_monitoring:
+      pip_index_url: "https://mirrors.aliyun.com/pypi/simple/"
+      pip_wheelhouse_s3_uri: ""

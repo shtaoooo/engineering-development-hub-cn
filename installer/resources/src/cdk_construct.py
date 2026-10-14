@@ -945,6 +945,26 @@ class SOCAInstall(Stack):
                     )
                 )
 
+        # China AMIs are account and Region scoped. Allow a deployment config to
+        # supply tested local IDs without modifying release-managed 000-* maps.
+        if self._region == "cn-northwest-1":
+            _cn_ami_overrides = get_config_key(
+                key_name="Config.china_region.ami_overrides",
+                required=False,
+                expected_type=dict,
+                default={},
+            )
+            for _arch, _base_os_map in _cn_ami_overrides.items():
+                if _arch not in self.soca_resources["custom_ami_map"]:
+                    logger.warning(f"Ignoring unsupported China AMI architecture: {_arch}")
+                    continue
+                if not isinstance(_base_os_map, dict):
+                    logger.warning(f"Ignoring invalid China AMI map for architecture: {_arch}")
+                    continue
+                for _base_os, _ami_id in _base_os_map.items():
+                    if _ami_id:
+                        self.soca_resources["custom_ami_map"][_arch][_base_os] = _ami_id
+
         # Determine our architecture base on controller
         # and our ami_id based on base_os/architecture
         # user_specified_variables.custom_ami
@@ -1343,6 +1363,24 @@ class SOCAInstall(Stack):
 
         self.iam_roles()  # Create IAM roles and policies for primary roles needed to deploy resources
 
+        # Lambda layers are built during CDK synth. Private indexes keep that
+        # build path inside approved China/on-prem package mirrors.
+        _lambda_pip_args: list[str] = []
+        _lambda_pip_index_url = get_config_key(
+            key_name="Config.lambda_layers.pip_index_url",
+            required=False,
+            default="",
+        )
+        _lambda_pip_extra_index_url = get_config_key(
+            key_name="Config.lambda_layers.pip_extra_index_url",
+            required=False,
+            default="",
+        )
+        if _lambda_pip_index_url:
+            _lambda_pip_args.extend(["--index-url", _lambda_pip_index_url])
+        if _lambda_pip_extra_index_url:
+            _lambda_pip_args.extend(["--extra-index-url", _lambda_pip_extra_index_url])
+
         # Create boto3 Lambda layer with version from config (no Docker)
         _boto3_version = get_config_key(
             key_name="Config.lambda_layers.Boto3Version",
@@ -1375,6 +1413,7 @@ class SOCAInstall(Stack):
                         _layer_dir,
                         "--no-cache-dir",
                         "-q",
+                        *_lambda_pip_args,
                     ]
                 )
 
@@ -1451,6 +1490,7 @@ class SOCAInstall(Stack):
                         _redis_layer_python_dir,
                         "--no-cache-dir",
                         "-q",
+                        *_lambda_pip_args,
                     ]
                 )
             self.soca_resources["redis_layer"] = aws_lambda.LayerVersion(
@@ -1521,6 +1561,7 @@ class SOCAInstall(Stack):
                         _crypto_layer_python_dir,
                         "--no-cache-dir",
                         "-q",
+                        *_lambda_pip_args,
                     ]
                 )
             self.soca_resources["cryptography_layer"] = aws_lambda.LayerVersion(
@@ -1594,6 +1635,7 @@ class SOCAInstall(Stack):
                         _psycopg_layer_python_dir,
                         "--no-cache-dir",
                         "-q",
+                        *_lambda_pip_args,
                     ]
                 )
             self.soca_resources["psycopg_layer"] = aws_lambda.LayerVersion(
@@ -4518,9 +4560,11 @@ class SOCAInstall(Stack):
                         f"No AMI found for {_instance} (arch {_instance_arch}, base os {self._base_os}, region {region}, testing next instance in selection"
                     )
 
-        if _default_ami_for_instance is None:
+        if not _default_ami_for_instance:
             logger.fatal(
-                "No AMI on region_map.yml found. Choose a different OS/Region or Architecture"
+                f"No AMI configured for base OS {self._base_os}, architecture "
+                f"{_instance_arch}, and region {region}. Add a matching RegionMap "
+                "entry or Config.china_region.ami_overrides before deployment."
             )
 
         if _selected_instance == "amnesiac":

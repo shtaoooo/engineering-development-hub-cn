@@ -509,25 +509,33 @@ def get_ami_mapping() -> dict:
 
 
 def get_install_properties(path: str) -> dict:
-    # Retrieve SOCA configuration properties
-    logger.debug(f"Configuration file path: {path}")
-    try:
-        with open(path, "r") as config_file:
-            config_parameters = yaml.safe_load(config_file)
-    except ScannerError as _err:
-        logger.error(f"{path} is not a valid YAML file. Verify syntax, {_err}")
-        sys.exit(1)
-    except FileNotFoundError:
-        logger.error(
-            f"{path} not found. Make sure the file exist and the path is correct."
-        )
-        sys.exit(1)
+    """Load one or more comma-separated YAML configurations, merging later files."""
+    def merge(base: dict, override: dict) -> dict:
+        for key, value in override.items():
+            if isinstance(value, dict) and isinstance(base.get(key), dict):
+                merge(base[key], value)
+            else:
+                base[key] = value
+        return base
 
-    if config_parameters:
-        return config_parameters
-    else:
-        return {}
-        # sys.exit("No parameters were found in configuration file.")
+    config_parameters: dict = {}
+    for config_path in (item.strip() for item in path.split(",") if item.strip()):
+        logger.debug(f"Configuration file path: {config_path}")
+        try:
+            with open(config_path, "r", encoding="utf-8") as config_file:
+                loaded = yaml.safe_load(config_file) or {}
+        except ScannerError as _err:
+            logger.error(f"{config_path} is not a valid YAML file. Verify syntax, {_err}")
+            sys.exit(1)
+        except FileNotFoundError:
+            logger.error(f"{config_path} not found. Make sure the file exists and the path is correct.")
+            sys.exit(1)
+        if not isinstance(loaded, dict):
+            logger.error(f"{config_path} must contain a YAML mapping at its root.")
+            sys.exit(1)
+        merge(config_parameters, loaded)
+
+    return config_parameters
 
 
 def retrieve_secret_value(secretsmanager_client: boto3.client, secret_id: str) -> dict:
