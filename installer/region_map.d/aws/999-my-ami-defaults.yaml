@@ -1,11 +1,5 @@
 ---
-
-# Example AMI defaults for my local site
-# Make sure to preserve proper YAML formatting/indention
-
-#us-east-1:
-#  x86_64:
-#    amazonlinux2: ami-123
-#us-east-2:
-#  x86_64:
-#    amazonlinux2: ami-456
+# Site-local AMI defaults. cn-northwest-1 RHEL 8.10 AMI verified 2026-09-02.
+cn-northwest-1:
+  x86_64:
+    rhel8: ami-00ccfc1b12bbbabfc

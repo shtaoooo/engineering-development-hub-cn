@@ -266,7 +266,15 @@ def apply_cn_northwest_defaults(install_properties: dict, region: str) -> None:
     mirror_config = config.setdefault("services", {}).setdefault(
         "resources_mirroring", {}
     )
-    mirror_config.update({"enabled": True, "method": "install-host", "failure_mode": "hard"})
+    # Keep an operator's explicit enabled:false, e.g. when all approved
+    # artifacts are already present under china_region.artifact_base_uri. The
+    # commercial default is method=ask; use install-host instead in Ningxia so
+    # unattended installs never block on an interactive mirror prompt.
+    mirror_config.setdefault("enabled", True)
+    if mirror_config.get("method") in (None, "ask"):
+        mirror_config["method"] = "install-host"
+    if mirror_config.get("failure_mode") in (None, "soft"):
+        mirror_config["failure_mode"] = "hard"
     config.setdefault("services", {}).setdefault("usb_remotization", {})["enabled"] = False
     config.setdefault("analytics", {})["enabled"] = False
     config.setdefault("ai_assistant", {})["allowed_bedrock_model_ids"] = []
@@ -1444,6 +1452,20 @@ if __name__ == "__main__":
             logger.debug(
                 f"User specified filesystem provider for /data: {install_parameters['fs_data_provider']}"
             )
+
+        if install_parameters.get("region") == "cn-northwest-1":
+            _unsupported_filesystems = {"fsx_lustre", "fsx_ontap", "fsx_openzfs"}
+            _selected_providers = {
+                install_parameters.get("fs_apps_provider"),
+                install_parameters.get("fs_data_provider"),
+            }
+            if _unsupported_filesystems & _selected_providers:
+                logger.error(
+                    "FSx providers are disabled for cn-northwest-1 until their regional "
+                    "availability and offline client repositories are verified. Use EFS or "
+                    "pass a separately validated implementation."
+                )
+                sys.exit(1)
 
         # Validate the parameters
         try:

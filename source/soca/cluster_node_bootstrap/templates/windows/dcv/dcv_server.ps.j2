@@ -7,12 +7,16 @@ function Install-DCVServer {
     if (-not (Get-Service -Name "dcvserver" -ErrorAction SilentlyContinue)) {
         Log-Info -Message "Installing DCVServer from {{ context.get("/system/dcv/windows/url") }}"
 
-        # Check and install Visual C++ prerequisite
+        # Check and install Visual C++ prerequisite through the shared downloader
+        # so China deployments can supply an S3 mirror and checksum in Parameters.
         $InstalledSoftware = (Get-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*) | Where-Object {$_.DisplayName -like "Microsoft Visual C++ 2022*"}
         if($InstalledSoftware.count -eq 0) {
-            Log-Info -Message "Microsoft Visual C++ 2022 not found, installing it ..."
-            Invoke-WebRequest -uri https://aka.ms/vs/17/release/vc_redist.x64.exe -OutFile "$EDHBootstrapAssetsFolder\vc_redist_64.exe"
-            & "$EDHBootstrapAssetsFolder\vc_redist_64.exe" /install /passive /norestart
+            $VcRedistUrl = "{{ context.get("/system/dcv/windows/vc_redist_url") }}"
+            $VcRedistSha = "{{ context.get("/system/dcv/windows/vc_redist_sha256", "") }}"
+            $VcRedistPath = "$EDHBootstrapAssetsFolder\vc_redist_64.exe"
+            Log-Info -Message "Microsoft Visual C++ 2022 not found, installing from $VcRedistUrl"
+            Invoke-SOCAFileDownload -DownloadUrl $VcRedistUrl -SaveAs $VcRedistPath -Sha256Checksum $VcRedistSha
+            & $VcRedistPath /install /passive /norestart
         }
 
         # Download Package(s). The DCV URL may be a pipe-delimited

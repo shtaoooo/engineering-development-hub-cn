@@ -3,6 +3,8 @@
 > 基线：当前 Git `HEAD`。行号为修改后工作区行号。新增文件或新增代码块的“原始代码”标记为“无”。
 >
 > 本文覆盖宁夏适配涉及的全部工作区改动；`.kiro/` 不属于运行时代码，未纳入。
+>
+> 2026-10-15 补充：依据 `EDH 宁夏区源码与配置修改说明.md`，本文更新为部署时填写的宁夏制品桶占位符、RHEL 8.10 AMI 和资源镜像修复。
 
 ## 1. `installer/default_config.yml`
 
@@ -95,18 +97,23 @@ dcv:
 
 修改后（行 1-20）：
 ```yaml
-# Ningxia overlay. Do not put credentials in this file.
+# Ningxia deployment overlay for cn-northwest-1.
 # Use with: --config installer/default_config.yml,installer/config.cn-northwest-1.yml
-# Public China mirrors are used for Python and npm. Use a private mirror in regulated environments.
 Config:
   china_region:
     safe_defaults_enabled: true
-    artifact_base_uri: "s3://nwcd-solutions/edh/artifacts"
-    # AMI IDs are account/region scoped. Leave empty until a real AMI is verified.
-    ami_overrides: {}
+    # Replace <cn-artifact-bucket> before deployment with the approved Ningxia S3 bucket.
+    artifact_base_uri: "s3://<cn-artifact-bucket>/edh/artifacts"
+    ami_overrides:
+      x86_64:
+        rhel8: "ami-00ccfc1b12bbbabfc"
   lambda_layers:
     pip_index_url: "https://mirrors.aliyun.com/pypi/simple/"
     pip_extra_index_url: ""
+  services:
+    resources_mirroring:
+      enabled: false
+      method: "install-host"
 Parameters:
   system:
     python:
@@ -120,9 +127,7 @@ Parameters:
       pip_wheelhouse_s3_uri: ""
 ```
 
-作用：提供单独的宁夏覆盖层，使用实际的阿里云 PyPI 和 npmmirror npm 公共镜像。S3 wheelhouse 为空时，节点会回退到已配置的 PyPI 镜像。
-
-待处理：AMI ID 是目标宁夏账户和区域专属资源，无法从代码仓库可靠推导；保持空映射可确保在未验证 AMI 时部署被明确阻断，而不会使用伪造 ID。
+作用：提供宁夏覆盖配置：部署前必须将 `<cn-artifact-bucket>` 替换为已预置制品的宁夏 S3 桶；RHEL 8.10 使用 `ami-00ccfc1b12bbbabfc`，并使用阿里云 PyPI 和 npmmirror。`resources_mirroring.enabled: false` 显式声明不创建云侧镜像执行器。
 
 ## 3. `installer/resources/src/helpers/installer/helpers.py`
 
@@ -705,3 +710,254 @@ if __name__ == "__main__":
 - [x] `default_config.yml,config.cn-northwest-1.yml` 深度合并验证通过。
 - [x] `sync_cn_artifacts.py --dry-run` 验证通过；不会下载或上传制品。
 - [ ] 尚未使用宁夏账户执行 CDK synth、制品实际同步或真实部署。
+
+## 12. `installer/region_map.d/aws/999-my-ami-defaults.yaml`
+
+### 宁夏 RHEL 8 AMI 的 RegionMap 预检映射（修改后行 1-5）
+
+原始代码：
+```yaml
+---
+
+# Example AMI defaults for my local site
+# Make sure to preserve proper YAML formatting/indention
+
+#us-east-1:
+#  x86_64:
+#    amazonlinux2: ami-123
+#us-east-2:
+#  x86_64:
+#    amazonlinux2: ami-456
+```
+
+修改后：
+```yaml
+---
+# Site-local AMI defaults. cn-northwest-1 RHEL 8.10 AMI verified 2026-09-02.
+cn-northwest-1:
+  x86_64:
+    rhel8: ami-00ccfc1b12bbbabfc
+```
+
+作用：`install_soca.py` 在进入 CDK 前会独立读取 `RegionMap.<region>.x86_64.<base_os>` 做基础 OS 可用性校验；该校验不读取 `Config.china_region.ami_overrides`。此映射使 `--base-os rhel8` 能通过宁夏预检，同时与 overlay 中的 AMI 保持一致。
+
+## 13. `installer/resources/src/helpers/installer/helpers.py`
+
+### 资源镜像跳过包管理目录 URL（修改后约行 947-964）
+
+原始代码：
+```python
+if url.endswith(".git") or url.startswith("git://"):
+    logger.info(f"Skipping git repository URL: {url}")
+    return True
+for excluded in MIRROR_EXCLUDE_URLS:
+    if url.startswith(excluded):
+        logger.info(f"Skipping excluded URL: {url}")
+        return True
+```
+
+修改后：
+```python
+if url.endswith(".git") or url.startswith("git://"):
+    logger.info(f"Skipping git repository URL: {url}")
+    return True
+# Package indexes and registries are directory endpoints, not artifacts.
+# Mirroring them attempts to save a directory and fails with Errno 21.
+if url.startswith(("http://", "https://")) and url.endswith("/"):
+    logger.info(f"Skipping directory/index URL (not an artifact): {url}")
+    return True
+for excluded in MIRROR_EXCLUDE_URLS:
+    if url.startswith(excluded):
+        logger.info(f"Skipping excluded URL: {url}")
+        return True
+```
+
+作用：`resources_mirroring()` 之前把 `pip_index_url` 和 `npm_registry` 一类以 `/` 结尾的索引目录当作文件下载，导致 `[Errno 21] Is a directory` 并终止安装。新规则会跳过所有 HTTP(S) 目录 URL；实际制品仍按原逻辑镜像和校验。
+
+## `source/` 后续适配审计
+
+本次目标不仅是 `cn-northwest-1` 的 CDK synth，还包括部署后 controller、login、compute 和可选 Windows/DCV 节点的 bootstrap。审计范围覆盖运行时端点、外部制品、包仓库和分区限定服务。
+
+但要完成无境外依赖的节点实际部署，以下模板仍应在启用对应功能前改为受控 S3/内部仓库，或在自定义 AMI 中预置：
+
+- [x] `source/soca/cluster_node_bootstrap/templates/windows/dcv/dcv_server.ps.j2`：VC++ Redistributable 已改为 `Parameters.system.dcv.windows.vc_redist_url` + `Invoke-SOCAFileDownload`。部署前须在 `<cn-artifact-bucket>` 预置该对象；生产建议固定版本并在 overlay 写入 SHA-256。
+- [x] `source/soca/cluster_node_bootstrap/templates/windows/dcv/dcv_vdi_monitoring.ps.j2`：CloudWatch Agent 已改为 `Parameters.system.cloudwatch_agent.windows.url` + `Invoke-SOCAFileDownload`；宁夏 overlay 使用 `.amazonaws.com.cn` 原始地址，并由制品重写映射到 `<cn-artifact-bucket>`。
+- [x] `source/soca/cluster_manager/web_interface/api/v1/cost_management/pricing.py`：已在 `cn-*` 直接关闭 Pricing API，避免控制面运行时调用硬编码的 `us-east-1`。
+- [x] `source/soca/cluster_node_bootstrap/templates/linux/scheduler/openpbs/install.sh.j2:148-160`：宁夏安全默认值已将 OpenPBS 设为 `tgz`，不会执行默认的 `git clone` 分支。
+- [x] `source/soca/cluster_node_bootstrap/templates/linux/shared_storage/mount_fsx_lustre.sh.j2`：宁夏已在安装参数阶段阻断 `fsx_lustre`，避免执行该模板的公共 FSx repo 下载。首轮使用 EFS。
+- [ ] `source/soca/cluster_node_bootstrap/templates/linux/gpu/amd_drivers.sh.j2:30-59`：RHEL/Rocky AMD 驱动使用 `repo.radeon.com` 和递归 `wget`。启用 AMD GPU 前应改为内网 Yum repo 或宁夏 S3 内的固定 RPM，并保留校验。
+- [ ] `source/soca/cluster_node_bootstrap/templates/linux/gpu/nvidia_drivers.sh.j2:120-123`：Tesla 驱动 URL 来自配置的公共 NVIDIA endpoint；应按批准的宁夏镜像地址覆盖或预置 AMI。
+- [ ] `source/soca/cluster_node_bootstrap/templates/linux/common/file_download.sh.j2:66-105`：仍支持公共 HTTP 与 git fallback。这是通用能力；宁夏生产配置必须确保所有启用功能的 URL 已预置到 `<cn-artifact-bucket>` 或内部源，避免运行时落到 fallback。
+- [ ] 基础 OS 的 DNF/Yum/APT 源不由 EDH 配置统一接管。RHEL 8 AMI 应在部署前确认其 RHUI/企业镜像可在宁夏子网访问；私有子网需要匹配的 VPC Endpoint、NAT 或内部软件仓库。
+
+已确认受配置和现有制品机制覆盖的节点制品包括 Python、Node.js、OpenPBS/Slurm 依赖、OpenMPI、EFA、SSM、DCV、Windows VC++、Windows CloudWatch Agent 和常规 `Parameters.system.*` URL。当前 overlay 的安全默认值关闭 analytics、Batch 示例、USB remotization、DCV high-scale/pool/session-sharing 和 Global Accelerator；全部 FSx provider 在宁夏安装参数阶段阻断。AMD/NVIDIA GPU、基础 OS 包仓库和没有被改写的公共 fallback 仍不能视为已验证。
+
+### 之前为什么没有发现
+
+1. 之前的检查集中在代码是否存在 `aws-cn` 分区、S3 后缀、AMI overlay 和包源可配置项，未按安装器的实际执行顺序走到 `RegionMap` 基础 OS 预检，因此遗漏了“AMI 有两套来源”的不一致。
+2. `rewrite_cn_artifact_urls()` 已对 `pip_index_url`/`npm_registry` 做 key 路径排除，导致静态审查误以为整个镜像流程已处理包源；实际 `resources_mirroring()` 使用独立的 URL 遍历和跳过规则，未复用该排除清单。
+3. 没有在真实宁夏账户使用带实际 registry URL 的配置执行 install-host 制品镜像，所以未触发目录 URL 下载的 `Errno 21`。本次 synth 实测日志提供了该运行时证据。
+4. 先前 `source/` 搜索范围偏向分区 ARN 和显式 AWS 端点，未按“是否绕过 Parameters/file_download”筛选 Windows VC++、FSx repo 与 AMD recursive wget 等功能性下载链路。
+
+## 14. `installer/resources/src/install_soca.py`
+
+### 尊重宁夏 overlay 的资源镜像开关（修改后约行 266-276）
+
+原始代码：
+```python
+mirror_config = config.setdefault("services", {}).setdefault(
+    "resources_mirroring", {}
+)
+mirror_config.update({"enabled": True, "method": "install-host", "failure_mode": "hard"})
+```
+
+修改后：
+```python
+mirror_config = config.setdefault("services", {}).setdefault(
+    "resources_mirroring", {}
+)
+# Keep an operator's explicit enabled:false, e.g. when all approved
+# artifacts are already present under china_region.artifact_base_uri. The
+# commercial default is method=ask; use install-host instead in Ningxia so
+# unattended installs never block on an interactive mirror prompt.
+mirror_config.setdefault("enabled", True)
+if mirror_config.get("method") in (None, "ask"):
+    mirror_config["method"] = "install-host"
+if mirror_config.get("failure_mode") in (None, "soft"):
+    mirror_config["failure_mode"] = "hard"
+```
+
+作用：宁夏 overlay 的 `resources_mirroring.enabled: false` 不再被安全默认值改回 `true`。部署会直接消费预置于 `s3://<cn-artifact-bucket>/edh/artifacts` 的制品；只有未显式配置时，宁夏才默认选择 install-host + hard failure。
+
+### 所有 FSx 客户端风险的宁夏部署保护（修改后约行 1448-1461）
+
+原始代码：无宁夏专用检查，任意文件系统 provider 会直接进入参数校验和后续 bootstrap。
+
+修改后：
+```python
+if install_parameters.get("region") == "cn-northwest-1":
+    _unsupported_filesystems = {"fsx_lustre", "fsx_ontap", "fsx_openzfs"}
+    _selected_providers = {
+        install_parameters.get("fs_apps_provider"),
+        install_parameters.get("fs_data_provider"),
+    }
+    if _unsupported_filesystems & _selected_providers:
+        logger.error(
+            "FSx providers are disabled for cn-northwest-1 until their regional "
+            "availability and offline client repositories are verified. Use EFS or "
+            "pass a separately validated implementation."
+        )
+        sys.exit(1)
+```
+
+作用：避免用户在宁夏直接启用未经验证的任意 FSx provider。FSx Lustre bootstrap 存在公共 repo 下载；ONTAP 和 OpenZFS 的区域能力、客户端和部署参数也尚未在当前基线验证。首轮部署应使用 EFS。
+
+## 15. `installer/default_config.yml`、`source/.../windows/dcv/dcv_server.ps.j2`
+
+### Windows DCV 的 VC++ 运行库进入配置和镜像链路
+
+原始代码（`dcv_server.ps.j2`）：
+```powershell
+Log-Info -Message "Microsoft Visual C++ 2022 not found, installing it ..."
+Invoke-WebRequest -uri https://aka.ms/vs/17/release/vc_redist.x64.exe -OutFile "$EDHBootstrapAssetsFolder\vc_redist_64.exe"
+& "$EDHBootstrapAssetsFolder\vc_redist_64.exe" /install /passive /norestart
+```
+
+修改后（模板）：
+```powershell
+$VcRedistUrl = "{{ context.get("/system/dcv/windows/vc_redist_url") }}"
+$VcRedistSha = "{{ context.get("/system/dcv/windows/vc_redist_sha256", "") }}"
+$VcRedistPath = "$EDHBootstrapAssetsFolder\vc_redist_64.exe"
+Log-Info -Message "Microsoft Visual C++ 2022 not found, installing from $VcRedistUrl"
+Invoke-SOCAFileDownload -DownloadUrl $VcRedistUrl -SaveAs $VcRedistPath -Sha256Checksum $VcRedistSha
+& $VcRedistPath /install /passive /norestart
+```
+
+新增配置（`default_config.yml` 的 `Parameters.system.dcv.windows`）：
+```yaml
+vc_redist_url: "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+vc_redist_sha256: "" # Set a verified hash when overriding this URL with a private S3 artifact.
+```
+
+作用：Windows DCV 节点不再绕过 `Invoke-SOCAFileDownload`。宁夏部署时，该 URL 会由静态制品重写为 `<cn-artifact-bucket>` 下的对象；推荐预置固定版本并在 overlay 中配置 SHA-256。
+
+## 16. `installer/default_config.yml`、`installer/config.cn-northwest-1.yml`、`source/.../windows/dcv/dcv_vdi_monitoring.ps.j2`
+
+### Windows CloudWatch Agent 进入宁夏制品链路
+
+原始代码：
+```powershell
+$AwsDomainSuffix = if ($AwsRegion -like "cn-*") { "amazonaws.com.cn" } else { "amazonaws.com" }
+$CwaUrl = "https://amazoncloudwatch-agent-$($AwsRegion).s3.$($AwsRegion).$AwsDomainSuffix/windows/amd64/latest/amazon-cloudwatch-agent.msi"
+...
+Invoke-WebRequest -Uri $CwaUrl -OutFile $CwaMsi -UseBasicParsing
+```
+
+修改后：
+```powershell
+$CwaUrl = "{{ context.get('/system/cloudwatch_agent/windows/url') }}".Replace("%region%", $AwsRegion)
+$CwaSha = "{{ context.get('/system/cloudwatch_agent/windows/sha256', '') }}"
+...
+Invoke-SOCAFileDownload -DownloadUrl $CwaUrl -SaveAs $CwaMsi -Sha256Checksum $CwaSha
+```
+
+新增默认配置：
+```yaml
+cloudwatch_agent:
+  windows:
+    url: "https://amazoncloudwatch-agent-%region%.s3.%region%.amazonaws.com/windows/amd64/latest/amazon-cloudwatch-agent.msi"
+    sha256: ""
+```
+
+宁夏 overlay 覆盖为：
+```yaml
+cloudwatch_agent:
+  windows:
+    url: "https://amazoncloudwatch-agent-cn-northwest-1.s3.cn-northwest-1.amazonaws.com.cn/windows/amd64/latest/amazon-cloudwatch-agent.msi"
+    sha256: ""
+```
+
+作用：Windows VDI 节点通过统一下载器支持 `s3://mirror|https://fallback`，并在宁夏由制品重写机制映射到 `<cn-artifact-bucket>`。`latest` 包是滚动版本，当前不填 hash；生产应固定版本、预置 S3 对象并填写经验证 SHA-256。
+
+## 17. `source/soca/cluster_manager/web_interface/api/v1/cost_management/pricing.py`
+
+### 中国区关闭不可用的 Pricing API
+
+原始代码：
+```python
+if _region.startswith("us-gov-"):
+    return SocaResponse(
+        success=False,
+        message=_("Cost estimation is not available in the GovCloud partition (the AWS Pricing API is not offered in aws-us-gov)."),
+    ).as_flask()
+```
+
+修改后：
+```python
+if _region.startswith(("us-gov-", "cn-")):
+    return SocaResponse(
+        success=False,
+        message=_(
+            "Cost estimation is not available in the AWS GovCloud or China partitions "
+            "because the AWS Pricing API is not available there."
+        ),
+    ).as_flask()
+```
+
+作用：成本估算 API 之前会从 `us-east-1` 创建 Pricing client；该服务不适用于中国区。现在返回明确的功能不可用响应，不影响集群核心功能、作业提交或节点管理。
+
+## 运行时部署结论（更新）
+
+- 已处理：中国区 S3 后缀、静态制品 S3 重写、RegionMap + overlay AMI、Linux/Windows Python 国内源、npm 国内源、Lambda layer 私有 PyPI、Windows DCV 的 VC++ 和 CloudWatch Agent 下载链路、Pricing API 分区保护、资源镜像目录 URL、FSx 未验证能力阻断。
+- 首轮可运行基线：`--base-os rhel8`、EFS、SQLite、OpenPBS tarball、`resources_mirroring.enabled: false`，并在部署前将全部改写后的静态制品预置到 `s3://<cn-artifact-bucket>/edh/artifacts`。使用 S3 Gateway Endpoint；若不提供 NAT，则还需按已启用 AWS API 服务建立 Interface Endpoint。
+- 仍必须实机预检后才可启用：任何 FSx provider、AMD/NVIDIA GPU、Windows/DCV、Batch、analytics/OpenSearch、Aurora Serverless v2、AI Assistant。它们分别依赖中国区服务可用性、特定 AMI/实例供给、系统包仓库或独立外部制品。
+
+### 宁夏实机运行验证矩阵
+
+静态代码检查只能证明已启用路径不会明显使用商业区硬编码端点或未受控的下载器，不能证明目标账号中所有服务、AMI、实例规格和软件仓库均可用。以下验证必须在 `cn-northwest-1` 的部署机与新建节点上执行：
+
+1. 使用当前 overlay 以 `--base-os rhel8 --fs-apps-provider efs --fs-data-provider efs --cdk-cmd synth` 验证 RegionMap、AMI、分区、Lambda layer 和 CDK 模板。
+2. 部署前将 overlay 中的 `<cn-artifact-bucket>` 替换为实际宁夏桶，再运行 `python installer/sync_cn_artifacts.py --config installer/default_config.yml,installer/config.cn-northwest-1.yml --region cn-northwest-1 --dry-run`；确认清单内每个对象都已存在于该桶的 `edh/artifacts/` 前缀，然后以 hash 校验实际对象。
+3. 用最小配置部署 controller/login/一个 compute 节点；验证节点 boot 日志中没有访问 `python.org`、GitHub、Node.js、CloudFront、PyPI、npmjs、aka.ms、公共 FSx repo、AMD/NVIDIA repo 的 fallback。
+4. 在 RHEL 8 节点执行系统包安装、Python requirements、OpenPBS tgz、SSM Agent、DCV（若启用）和 EFS mount 的端到端验证。私有子网须验证 S3 Gateway Endpoint、SSM/EC2/CloudWatch/Secrets Manager 等已启用服务的 Interface Endpoint 或经批准 NAT。
+5. 仅在该最小集稳定后，逐项单独开启 Windows/DCV、GPU、FSx、Aurora、OpenSearch、Batch 和 AI Assistant；每项都先执行区域 API/服务目录预检，再启动实际节点。

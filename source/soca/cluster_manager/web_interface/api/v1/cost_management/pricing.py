@@ -365,10 +365,13 @@ class AwsPrice(Resource):
         """
         _region_resp = SocaConfig(key="/configuration/Region").get_value()
         _region = _region_resp.message if _region_resp.success is True else ""
-        if _region.startswith("us-gov-"):
+        if _region.startswith(("us-gov-", "cn-")):
             return SocaResponse(
                 success=False,
-                message=_("Cost estimation is not available in the GovCloud partition (the AWS Pricing API is not offered in aws-us-gov)."),
+                message=_(
+                    "Cost estimation is not available in the AWS GovCloud or China partitions "
+                    "because the AWS Pricing API is not available there."
+                ),
             ).as_flask()
 
         parser = reqparse.RequestParser()

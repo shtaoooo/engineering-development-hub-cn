@@ -17,8 +17,8 @@ Log-Info -Message "Installing DCV VDI host monitoring (CW Agent + streaming coll
 
 $AwsRegion  = "{{ context.get('/configuration/Region') }}"
 $ClusterId  = "{{ context.get('/configuration/ClusterId') }}"
-$AwsDomainSuffix = if ($AwsRegion -like "cn-*") { "amazonaws.com.cn" } else { "amazonaws.com" }
-$CwaUrl     = "https://amazoncloudwatch-agent-$($AwsRegion).s3.$($AwsRegion).$AwsDomainSuffix/windows/amd64/latest/amazon-cloudwatch-agent.msi"
+$CwaUrl = "{{ context.get('/system/cloudwatch_agent/windows/url') }}".Replace("%region%", $AwsRegion)
+$CwaSha = "{{ context.get('/system/cloudwatch_agent/windows/sha256', '') }}"
 
 ##
 ## 1. CloudWatch Agent
@@ -27,7 +27,7 @@ $CwaInstalled = (Get-Service -Name "AmazonCloudWatchAgent" -ErrorAction Silently
 if (-not $CwaInstalled) {
     Log-Info -Message "Downloading CloudWatch Agent from $CwaUrl"
     $CwaMsi = "$env:TEMP\amazon-cloudwatch-agent.msi"
-    Invoke-WebRequest -Uri $CwaUrl -OutFile $CwaMsi -UseBasicParsing
+    Invoke-SOCAFileDownload -DownloadUrl $CwaUrl -SaveAs $CwaMsi -Sha256Checksum $CwaSha
     $proc = Start-Process msiexec.exe -ArgumentList "/i `"$CwaMsi`" /qn /norestart" -Wait -PassThru
     if ($proc.ExitCode -ne 0) {
         throw "CloudWatch Agent msiexec failed with exit code $($proc.ExitCode)"

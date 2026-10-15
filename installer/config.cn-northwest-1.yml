@@ -1,15 +1,20 @@
-# Ningxia overlay. Do not put credentials in this file.
+# Ningxia deployment overlay for cn-northwest-1.
 # Use with: --config installer/default_config.yml,installer/config.cn-northwest-1.yml
-# Public China mirrors are used for Python and npm. Use a private mirror in regulated environments.
 Config:
   china_region:
     safe_defaults_enabled: true
-    artifact_base_uri: "s3://nwcd-solutions/edh/artifacts"
-    # AMI IDs are account/region scoped. Leave empty until a real AMI is verified.
-    ami_overrides: {}
+    # Replace <cn-artifact-bucket> before deployment with the approved Ningxia S3 bucket.
+    artifact_base_uri: "s3://<cn-artifact-bucket>/edh/artifacts"
+    ami_overrides:
+      x86_64:
+        rhel8: "ami-00ccfc1b12bbbabfc"
   lambda_layers:
     pip_index_url: "https://mirrors.aliyun.com/pypi/simple/"
     pip_extra_index_url: ""
+  services:
+    resources_mirroring:
+      enabled: false
+      method: "install-host"
 Parameters:
   system:
     python:
@@ -21,3 +26,7 @@ Parameters:
     windows_dcv_monitoring:
       pip_index_url: "https://mirrors.aliyun.com/pypi/simple/"
       pip_wheelhouse_s3_uri: ""
+    cloudwatch_agent:
+      windows:
+        url: "https://amazoncloudwatch-agent-cn-northwest-1.s3.cn-northwest-1.amazonaws.com.cn/windows/amd64/latest/amazon-cloudwatch-agent.msi"
+        sha256: ""

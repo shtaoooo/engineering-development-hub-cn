@@ -1134,6 +1134,9 @@ Parameters:
     # CloudWatch agent is only used if you enable cluster_node_boostrap/templates/linux/aws_cloudwatch_agent.sh.j2
     cloudwatch_agent:
       download_link_pattern: "https://s3.%region%.amazonaws.com/amazoncloudwatch-agent-%region%/%os%/%architecture%/latest/amazon-cloudwatch-agent.%ext%"
+      windows:
+        url: "https://amazoncloudwatch-agent-%region%.s3.%region%.amazonaws.com/windows/amd64/latest/amazon-cloudwatch-agent.msi"
+        sha256: "" # Set when pinning this rolling latest artifact in a private mirror.
 
     # SSM is automatically installed on all SOCA nodes, giving you the permission to access your host via AWS System Manager and perform DCV automations
     # We do not recommend disable it
@@ -1314,6 +1317,8 @@ Parameters:
         version: "2025.0-20103"
         url: "https://d1uj6qtbmh3dt5.cloudfront.net/2025.0/Servers/nice-dcv-server-x64-Release-2025.0-20103.msi"
         sha256: "593e2b78cd41b64fac255f303e48b1e7f73129969279ba2eae067e519f962067"
+        vc_redist_url: "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+        vc_redist_sha256: "" # Set a verified hash when overriding this URL with a private S3 artifact.
 
       # DCV Session Manager Broker (noarch — Java-based, one RPM per OS family)
       session_manager_broker:

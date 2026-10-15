@@ -957,6 +957,11 @@ def resources_mirroring(
         if url.endswith(".git") or url.startswith("git://"):
             logger.info(f"Skipping git repository URL: {url}")
             return True
+        # Package indexes and registries are directory endpoints, not artifacts.
+        # Mirroring them attempts to save a directory and fails with Errno 21.
+        if url.startswith(("http://", "https://")) and url.endswith("/"):
+            logger.info(f"Skipping directory/index URL (not an artifact): {url}")
+            return True
         for excluded in MIRROR_EXCLUDE_URLS:
             if url.startswith(excluded):
                 logger.info(f"Skipping excluded URL: {url}")
